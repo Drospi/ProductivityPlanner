@@ -4,21 +4,30 @@
     "slug": "ProductivityPlanner",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-proplanner.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-proplanner.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+        "foregroundImage": "./assets/icon-proplanner.png"
+      },
+      "package": "com.drospi.ProductivityPlanner"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "603ee71d-076d-4a8e-9b6e-deda9c9bd1de"
+      }
     }
   }
 }
