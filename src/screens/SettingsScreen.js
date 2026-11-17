@@ -178,6 +178,69 @@ export const SettingsScreen = () => {
         )}
       </View>
 
+      {/* Telemetría y Registro Automático en Calendario */}
+      <Text style={[styles.sectionTitle, { color: colors.textPrimary, marginTop: 20 }]}>
+        Telemetría de Uso
+      </Text>
+      <Text style={[styles.sectionSub, { color: colors.textSecondary }]}>
+        Registra automáticamente en tu calendario si pasas más del límite de minutos en otra app.
+      </Text>
+
+      <View style={[styles.settingCard, { backgroundColor: colors.surface, borderColor: colors.surfaceBorder }]}>
+        <View style={styles.settingRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            <Feather
+              name="activity"
+              size={20}
+              color={settings.autoTelemetryCalendar !== false ? '#8B5CF6' : colors.textMuted}
+              style={{ marginRight: 12 }}
+            />
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={[styles.settingTitle, { color: colors.textPrimary }]}>
+                Auto-registrar en calendario
+              </Text>
+              <Text style={[styles.settingDesc, { color: colors.textSecondary }]}>
+                {settings.autoTelemetryCalendar !== false
+                  ? `Registra bloques mayores a ${settings.telemetryThresholdMinutes ?? 15} min`
+                  : 'Solo guardar en resumen del cierre diario'}
+              </Text>
+            </View>
+          </View>
+          <Switch
+            value={settings.autoTelemetryCalendar !== false}
+            onValueChange={(val) => updateSettings({ autoTelemetryCalendar: val })}
+            trackColor={{ false: colors.surfaceBorder, true: '#8B5CF6' }}
+            thumbColor="#FFFFFF"
+          />
+        </View>
+
+        <View style={[styles.divider, { backgroundColor: colors.surfaceBorder }]} />
+
+        <Text style={[styles.inputLabel, { color: colors.textSecondary, marginBottom: 8 }]}>
+          UMBRAL MÍNIMO PARA REGISTRAR EN CALENDARIO
+        </Text>
+        <View style={styles.leadMinutesRow}>
+          {[10, 15, 20, 30, 45].map((mins) => {
+            const isSelected = (settings.telemetryThresholdMinutes ?? 15) === mins;
+            return (
+              <TouchableOpacity
+                key={`tel_th_${mins}`}
+                style={[
+                  styles.leadChip,
+                  { backgroundColor: colors.background, borderColor: colors.surfaceBorder },
+                  isSelected && { backgroundColor: '#8B5CF6', borderColor: '#8B5CF6' },
+                ]}
+                onPress={() => updateSettings({ telemetryThresholdMinutes: mins })}
+              >
+                <Text style={{ color: isSelected ? '#FFFFFF' : colors.textPrimary, fontWeight: '700', fontSize: 12 }}>
+                  &gt; {mins}m
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
       {/* Apariencia / Modo Oscuro */}
       <Text style={[styles.sectionTitle, { color: colors.textPrimary, marginTop: 20 }]}>Apariencia</Text>
       <View style={[styles.settingCard, { backgroundColor: colors.surface, borderColor: colors.surfaceBorder }]}>

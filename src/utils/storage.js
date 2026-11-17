@@ -4,6 +4,8 @@ const EVENTS_STORAGE_KEY = '@pme_planner_events';
 const GOALS_STORAGE_KEY = '@pme_planner_goals';
 const TASKS_STORAGE_KEY = '@pme_planner_tasks';
 const SETTINGS_STORAGE_KEY = '@pme_planner_settings';
+const TELEMETRY_STORAGE_KEY = '@pme_planner_telemetry';
+const BACKGROUND_TS_KEY = '@pme_planner_bg_timestamp';
 
 const now = new Date();
 const getRecentDate = (daysAgo) => {
@@ -290,6 +292,40 @@ export const INITIAL_SETTINGS = {
   focusTimeMinutes: 1455, // 24h 15m
   notificationsEnabled: true,
   notificationLeadMinutes: 15,
+  autoTelemetryCalendar: true,
+  telemetryThresholdMinutes: 15,
+};
+
+export const INITIAL_TELEMETRY = {
+  logs: [
+    {
+      id: 'tel_init_1',
+      date: todayStr,
+      appName: 'YouTube',
+      category: 'Digital',
+      minutes: 25,
+      startTime: '13:30',
+      endTime: '13:55',
+      registeredInCalendar: false,
+      calendarEventId: null,
+      source: 'sample',
+    },
+    {
+      id: 'tel_init_2',
+      date: todayStr,
+      appName: 'WhatsApp',
+      category: 'Personal',
+      minutes: 10,
+      startTime: '11:40',
+      endTime: '11:50',
+      registeredInCalendar: false,
+      calendarEventId: null,
+      source: 'sample',
+    },
+  ],
+  activeMinutesByDate: {
+    [todayStr]: 18,
+  },
 };
 
 export const loadAppData = async () => {
@@ -298,6 +334,7 @@ export const loadAppData = async () => {
     const goalsJson = await AsyncStorage.getItem(GOALS_STORAGE_KEY);
     const tasksJson = await AsyncStorage.getItem(TASKS_STORAGE_KEY);
     const settingsJson = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
+    const telemetryJson = await AsyncStorage.getItem(TELEMETRY_STORAGE_KEY);
 
     const events = eventsJson ? JSON.parse(eventsJson) : INITIAL_EVENTS;
     const rawGoals = goalsJson ? JSON.parse(goalsJson) : INITIAL_GOALS;
@@ -326,9 +363,18 @@ export const loadAppData = async () => {
       dueDate: t.dueDate || null,
       priority: t.priority || 'media',
     }));
-    const settings = settingsJson ? JSON.parse(settingsJson) : INITIAL_SETTINGS;
+    const rawSettings = settingsJson ? JSON.parse(settingsJson) : INITIAL_SETTINGS;
+    const settings = {
+      ...INITIAL_SETTINGS,
+      ...rawSettings,
+    };
+    const rawTelemetry = telemetryJson ? JSON.parse(telemetryJson) : INITIAL_TELEMETRY;
+    const telemetry = {
+      logs: Array.isArray(rawTelemetry?.logs) ? rawTelemetry.logs : INITIAL_TELEMETRY.logs,
+      activeMinutesByDate: rawTelemetry?.activeMinutesByDate || INITIAL_TELEMETRY.activeMinutesByDate,
+    };
 
-    return { events, goals, tasks, settings };
+    return { events, goals, tasks, settings, telemetry };
   } catch (e) {
     console.error('Error loading app data from AsyncStorage:', e);
     return {
@@ -336,18 +382,41 @@ export const loadAppData = async () => {
       goals: INITIAL_GOALS,
       tasks: INITIAL_TASKS,
       settings: INITIAL_SETTINGS,
+      telemetry: INITIAL_TELEMETRY,
     };
   }
 };
 
-export const saveAppData = async ({ events, goals, tasks, settings }) => {
+export const saveAppData = async ({ events, goals, tasks, settings, telemetry }) => {
   try {
     if (events) await AsyncStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(events));
     if (goals) await AsyncStorage.setItem(GOALS_STORAGE_KEY, JSON.stringify(goals));
     if (tasks) await AsyncStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
     if (settings) await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    if (telemetry) await AsyncStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(telemetry));
   } catch (e) {
     console.error('Error saving app data to AsyncStorage:', e);
+  }
+};
+
+export const saveBackgroundTimestamp = async (timestamp) => {
+  try {
+    if (timestamp) {
+      await AsyncStorage.setItem(BACKGROUND_TS_KEY, String(timestamp));
+    } else {
+      await AsyncStorage.removeItem(BACKGROUND_TS_KEY);
+    }
+  } catch (e) {
+    console.warn('Error saving background timestamp:', e);
+  }
+};
+
+export const loadBackgroundTimestamp = async () => {
+  try {
+    const val = await AsyncStorage.getItem(BACKGROUND_TS_KEY);
+    return val ? parseInt(val, 10) : null;
+  } catch (e) {
+    return null;
   }
 };
 

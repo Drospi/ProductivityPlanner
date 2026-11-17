@@ -13,6 +13,7 @@ import { useAppData } from '../context/AppDataContext';
 import { Badge } from '../components/common/Badge';
 import { ProgressBar } from '../components/common/ProgressBar';
 import { getDayGreetingContext, getRecommendedActions } from '../utils/coach';
+import { getLocalDateStr, getDailyTelemetrySummary, DEFAULT_TELEMETRY_THRESHOLD_MINUTES } from '../utils/telemetry';
 
 export const HomeScreen = ({
   onOpenNewEvent,
@@ -24,17 +25,25 @@ export const HomeScreen = ({
   onOpenDailyReview,
 }) => {
   const { colors } = useTheme();
-  const { events, tasks, goals, settings, toggleTaskCompletion } = useAppData();
+  const { events, tasks, goals, settings, telemetryLogs, activeMinutesByDate, toggleTaskCompletion } = useAppData();
 
   const [alternativeIndex, setAlternativeIndex] = useState(0);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateStr();
 
-  // Eventos de hoy
-  const todayEvents = (events || []).filter((e) => e.date === todayStr);
+  // Eventos de hoy (excluye bloques de telemetría del conteo de planificados)
+  const todayEvents = (events || []).filter((e) => e.date === todayStr && !e.isTelemetry);
   const nextEvent = todayEvents
     .filter((e) => !e.completed && !e.isBackupPlan)
     .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))[0];
+
+  const thresholdMins = settings.telemetryThresholdMinutes ?? DEFAULT_TELEMETRY_THRESHOLD_MINUTES;
+  const telemetrySummary = getDailyTelemetrySummary(
+    telemetryLogs,
+    (activeMinutesByDate && activeMinutesByDate[todayStr]) || 0,
+    todayStr,
+    thresholdMins
+  );
 
   // Tareas de hoy
   const todayTasks = (tasks || []).filter((t) => {
@@ -354,23 +363,34 @@ export const HomeScreen = ({
         </View>
       )}
 
-      {/* 6. Cierre Diario (Check-in nocturno sereno) */}
+      {/* 6. Cierre Diario (Check-in nocturno sereno + Telemetría) */}
       <TouchableOpacity
         style={[styles.dailyReviewCard, { backgroundColor: colors.surface, borderColor: colors.surfaceBorder }]}
         onPress={onOpenDailyReview}
         activeOpacity={0.8}
         accessibilityRole="button"
-        accessibilityLabel="Hacer cierre diario del día"
+        accessibilityLabel="Hacer cierre diario del día y revisar telemetría"
       >
         <View style={[styles.iconCircle, { backgroundColor: colors.primaryLight }]}>
           <Ionicons name="moon-outline" size={20} color={colors.primary} />
         </View>
         <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={[styles.dailyReviewTitle, { color: colors.textPrimary }]}>
-            Cierre Diario
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={[styles.dailyReviewTitle, { color: colors.textPrimary }]}>
+              Cierre Diario & Telemetría
+            </Text>
+            {telemetrySummary.overThresholdLogs.length > 0 && (
+              <View style={{ backgroundColor: '#8B5CF622', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginRight: 8 }}>
+                <Text style={{ fontSize: 10, fontWeight: '800', color: '#8B5CF6' }}>
+                  {telemetrySummary.overThresholdLogs.length} app &gt;{thresholdMins}m
+                </Text>
+              </View>
+            )}
+          </View>
           <Text style={[styles.dailyReviewSub, { color: colors.textSecondary }]}>
-            Revisa lo logrado y organiza el día de mañana con calma.
+            {totalDailyActivities - completedDailyActivities > 0
+              ? `${totalDailyActivities - completedDailyActivities} sin completar (acceso rápido opcional) • Telemetría de hoy.`
+              : 'Revisa tu telemetría, lo logrado y organiza el día de mañana con calma.'}
           </Text>
         </View>
         <Feather name="arrow-right" size={18} color={colors.textMuted} />

@@ -21,6 +21,10 @@ export const Badge = ({ label, category, customColor, customBg, customTextColor 
         return colors.study;
       case 'viajes':
         return colors.travel;
+      case 'digital':
+      case 'telemetría':
+      case 'telemetria':
+        return '#8B5CF6';
       default:
         return colors.primary;
     }

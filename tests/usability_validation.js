@@ -8,6 +8,12 @@ const assert = require('assert');
 // Mock dependencies
 const { getDayGreetingContext, getRecommendedActions } = require('../src/utils/coach');
 const { darkColors, lightColors } = require('../src/styles/colors');
+const {
+  shouldRegisterTelemetryInCalendar,
+  buildTelemetryCalendarEvent,
+  getDailyTelemetrySummary,
+  QUICK_REPLACEMENT_OPTIONS,
+} = require('../src/utils/telemetry');
 
 console.log('--- INICIANDO SUITE DE PRUEBAS DE USABILIDAD Y PRODUCTIVIDAD ---');
 
@@ -159,6 +165,62 @@ assert.ok(lightColors.background && lightColors.surface && lightColors.primary, 
 assert.notStrictEqual(darkColors.background, lightColors.background, 'Fondos claramente diferenciados');
 console.log(`✓ Escenario 7 Superado: Paletas dark/light válidas y contrastes consistentes`);
 
+// ESCENARIO 8: Telemetría del día y registro automático en calendario si > 15 minutos
+console.log('\n[Escenario 8]: Telemetría de uso (> 15 min -> calendario)');
+assert.strictEqual(shouldRegisterTelemetryInCalendar(10, 15), false, '10 min no debe ir al calendario');
+assert.strictEqual(shouldRegisterTelemetryInCalendar(15, 15), false, '15 min exactos no supera los 15 min');
+assert.strictEqual(shouldRegisterTelemetryInCalendar(16, 15), true, '16 min (> 15) debe ir al calendario');
+assert.strictEqual(shouldRegisterTelemetryInCalendar(35, 15), true, '35 min (> 15) debe ir al calendario');
+
+const mockTelemetryLogs = [
+  {
+    id: 'tel_short',
+    date: todayStr,
+    appName: 'WhatsApp',
+    category: 'Personal',
+    minutes: 12,
+    startTime: '11:00',
+    endTime: '11:12',
+    registeredInCalendar: false,
+  },
+  {
+    id: 'tel_long',
+    date: todayStr,
+    appName: 'YouTube',
+    category: 'Digital',
+    minutes: 28,
+    startTime: '15:00',
+    endTime: '15:28',
+    registeredInCalendar: false,
+  },
+];
+
+const telSummaryBefore = getDailyTelemetrySummary(mockTelemetryLogs, 20, todayStr, 15);
+assert.strictEqual(telSummaryBefore.overThresholdLogs.length, 1);
+assert.strictEqual(telSummaryBefore.pendingCalendarSync.length, 1);
+
+const generatedCalEvent = buildTelemetryCalendarEvent(mockTelemetryLogs[1], 15);
+assert.strictEqual(generatedCalEvent.isTelemetry, true);
+assert.strictEqual(generatedCalEvent.date, todayStr);
+assert.ok(generatedCalEvent.title.includes('YouTube'));
+assert.ok(generatedCalEvent.title.includes('28 min'));
+mockTelemetryLogs[1].registeredInCalendar = true;
+mockEvents.push({ id: 'e_tel_1', ...generatedCalEvent });
+
+const telSummaryAfter = getDailyTelemetrySummary(mockTelemetryLogs, 20, todayStr, 15);
+assert.strictEqual(telSummaryAfter.syncedToCalendarCount, 1);
+assert.strictEqual(telSummaryAfter.pendingCalendarSync.length, 0);
+console.log('✓ Escenario 8 Superado: Solo sesiones > 15 min se registran en calendario con su bloque horario');
+
+// ESCENARIO 9: Acceso rápido opcional para actividades no completadas al final del día
+console.log('\n[Escenario 9]: Acceso rápido opcional al final del día');
+assert.ok(Array.isArray(QUICK_REPLACEMENT_OPTIONS) && QUICK_REPLACEMENT_OPTIONS.length >= 4, 'Debe haber accesos rápidos predefinidos');
+const uncompletedEvents = mockEvents.filter((e) => !e.completed && !e.isTelemetry);
+assert.ok(uncompletedEvents.length >= 1, 'Debe identificar eventos sin completar para el collapsible');
+const chosenQuickOption = QUICK_REPLACEMENT_OPTIONS[0];
+assert.ok(chosenQuickOption.label && chosenQuickOption.icon && chosenQuickOption.category);
+console.log(`✓ Escenario 9 Superado: Acceso rápido opcional disponible (${QUICK_REPLACEMENT_OPTIONS.length} opciones en 1 toque)`);
+
 console.log('\n======================================================');
-console.log('TODAS LAS PRUEBAS DE USABILIDAD Y NEGOCIO PASARON (7/7)');
+console.log('TODAS LAS PRUEBAS DE USABILIDAD Y NEGOCIO PASARON (9/9)');
 console.log('======================================================');

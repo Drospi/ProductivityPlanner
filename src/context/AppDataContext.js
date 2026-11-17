@@ -1,10 +1,27 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
-import { loadAppData, saveAppData, INITIAL_EVENTS, INITIAL_GOALS, INITIAL_TASKS, INITIAL_SETTINGS } from '../utils/storage';
+import React, { createContext, useState, useEffect, useContext, useRef } from 'react';
+import { AppState } from 'react-native';
+import {
+  loadAppData,
+  saveAppData,
+  saveBackgroundTimestamp,
+  loadBackgroundTimestamp,
+  INITIAL_EVENTS,
+  INITIAL_GOALS,
+  INITIAL_TASKS,
+  INITIAL_SETTINGS,
+  INITIAL_TELEMETRY,
+} from '../utils/storage';
 import {
   scheduleEventNotification,
   cancelEventNotification,
   rescheduleAllUpcomingNotifications,
 } from '../utils/notifications';
+import {
+  shouldRegisterTelemetryInCalendar,
+  calculateTimeWindow,
+  buildTelemetryCalendarEvent,
+  getLocalDateStr,
+} from '../utils/telemetry';
 
 const AppDataContext = createContext();
 
@@ -13,13 +30,38 @@ export const AppDataProvider = ({ children }) => {
   const [goals, setGoals] = useState(INITIAL_GOALS);
   const [tasks, setTasks] = useState(INITIAL_TASKS);
   const [settings, setSettings] = useState(INITIAL_SETTINGS);
+  const [telemetryLogs, setTelemetryLogs] = useState(INITIAL_TELEMETRY.logs);
+  const [activeMinutesByDate, setActiveMinutesByDate] = useState(INITIAL_TELEMETRY.activeMinutesByDate);
   const [loading, setLoading] = useState(true);
+
+  const appStateRef = useRef(AppState.currentState);
+  const bgTimestampRef = useRef(null);
+  const activeStartRef = useRef(Date.now());
+  const latestRef = useRef({
+    events: INITIAL_EVENTS,
+    goals: INITIAL_GOALS,
+    tasks: INITIAL_TASKS,
+    settings: INITIAL_SETTINGS,
+    telemetryLogs: INITIAL_TELEMETRY.logs,
+    activeMinutesByDate: INITIAL_TELEMETRY.activeMinutesByDate,
+  });
+
+  useEffect(() => {
+    latestRef.current = {
+      events,
+      goals,
+      tasks,
+      settings,
+      telemetryLogs,
+      activeMinutesByDate,
+    };
+  }, [events, goals, tasks, settings, telemetryLogs, activeMinutesByDate]);
 
   useEffect(() => {
     const initData = async () => {
       const data = await loadAppData();
       let updatedSettings = { ...data.settings };
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getLocalDateStr();
 
       if (!updatedSettings.lastVisitDate) {
         updatedSettings.lastVisitDate = todayStr;
@@ -40,15 +82,88 @@ export const AppDataProvider = ({ children }) => {
         saveAppData({ events: data.events, goals: data.goals, tasks: data.tasks, settings: updatedSettings });
       }
 
-      setEvents(data.events || []);
+      let loadedEvents = data.events || [];
+      let loadedLogs = data.telemetry?.logs || [];
+      const loadedActiveMins = data.telemetry?.activeMinutesByDate || {};
+      const threshold = updatedSettings.telemetryThresholdMinutes ?? 15;
+      const autoRegister = updatedSettings.autoTelemetryCalendar !== false;
+
+      // Check if app returned from a saved background timestamp (> threshold min same day)
+      const savedBgTs = await loadBackgroundTimestamp();
+      if (savedBgTs) {
+        await saveBackgroundTimestamp(null);
+        const nowTs = Date.now();
+        const awayMins = Math.round((nowTs - savedBgTs) / 60000);
+        const bgDateStr = getLocalDateStr(new Date(savedBgTs));
+        if (bgDateStr === todayStr && shouldRegisterTelemetryInCalendar(awayMins, threshold) && awayMins <= 240) {
+          const { startTime, endTime } = calculateTimeWindow(awayMins, new Date(nowTs));
+          loadedLogs = [
+            {
+              id: 'tel_auto_' + nowTs,
+              date: todayStr,
+              appName: 'App externa detectada',
+              category: 'Digital',
+              minutes: awayMins,
+              startTime,
+              endTime,
+              registeredInCalendar: false,
+              calendarEventId: null,
+              source: 'auto_appstate',
+            },
+            ...loadedLogs,
+          ];
+        }
+      }
+
+      // Auto-register any pending today telemetry entries > threshold when enabled
+      if (autoRegister) {
+        let didSync = false;
+        loadedLogs = loadedLogs.map((entry) => {
+          if (
+            entry.date === todayStr &&
+            !entry.registeredInCalendar &&
+            shouldRegisterTelemetryInCalendar(entry.minutes, threshold)
+          ) {
+            const alreadyInEvents = loadedEvents.some((ev) => ev.telemetryId === entry.id);
+            if (!alreadyInEvents) {
+              const newEvId = 'e_tel_' + entry.id;
+              const calEvent = {
+                id: newEvId,
+                ...buildTelemetryCalendarEvent(entry, threshold),
+              };
+              loadedEvents = [calEvent, ...loadedEvents];
+              didSync = true;
+              return {
+                ...entry,
+                registeredInCalendar: true,
+                calendarEventId: newEvId,
+              };
+            }
+          }
+          return entry;
+        });
+        if (didSync) {
+          saveAppData({
+            events: loadedEvents,
+            goals: data.goals,
+            tasks: data.tasks,
+            settings: updatedSettings,
+            telemetry: { logs: loadedLogs, activeMinutesByDate: loadedActiveMins },
+          });
+        }
+      }
+
+      setEvents(loadedEvents);
       setGoals(data.goals || []);
       setTasks(data.tasks || []);
       setSettings(updatedSettings);
+      setTelemetryLogs(loadedLogs);
+      setActiveMinutesByDate(loadedActiveMins);
       setLoading(false);
 
       // Reschedule upcoming notifications on app load if enabled
       if (updatedSettings.notificationsEnabled !== false) {
-        rescheduleAllUpcomingNotifications(data.events || [], updatedSettings).then((rescheduled) => {
+        rescheduleAllUpcomingNotifications(loadedEvents, updatedSettings).then((rescheduled) => {
           if (rescheduled && rescheduled.length > 0) {
             setEvents(rescheduled);
             saveAppData({ events: rescheduled, goals: data.goals, tasks: data.tasks, settings: updatedSettings });
@@ -59,12 +174,121 @@ export const AppDataProvider = ({ children }) => {
     initData();
   }, []);
 
-  const persistData = (newEvents, newGoals, newTasks, newSettings) => {
+  // Track active usage inside app & background away sessions (> 15 min) via AppState
+  useEffect(() => {
+    const flushActiveMinutes = () => {
+      const now = Date.now();
+      const elapsedMins = Math.floor((now - activeStartRef.current) / 60000);
+      if (elapsedMins >= 1) {
+        activeStartRef.current = now;
+        const todayStr = getLocalDateStr();
+        const curMap = latestRef.current.activeMinutesByDate || {};
+        const nextMap = {
+          ...curMap,
+          [todayStr]: (curMap[todayStr] || 0) + elapsedMins,
+        };
+        setActiveMinutesByDate(nextMap);
+        saveAppData({
+          telemetry: {
+            logs: latestRef.current.telemetryLogs,
+            activeMinutesByDate: nextMap,
+          },
+        });
+      }
+    };
+
+    const intervalId = setInterval(() => {
+      if (appStateRef.current === 'active') {
+        flushActiveMinutes();
+      }
+    }, 60000);
+
+    const subscription = AppState.addEventListener('change', async (nextAppState) => {
+      const prev = appStateRef.current;
+      appStateRef.current = nextAppState;
+
+      if (prev === 'active' && nextAppState.match(/inactive|background/)) {
+        flushActiveMinutes();
+        const ts = Date.now();
+        bgTimestampRef.current = ts;
+        await saveBackgroundTimestamp(ts);
+      } else if (prev.match(/inactive|background/) && nextAppState === 'active') {
+        activeStartRef.current = Date.now();
+        const bgTs = bgTimestampRef.current || (await loadBackgroundTimestamp());
+        bgTimestampRef.current = null;
+        await saveBackgroundTimestamp(null);
+
+        if (bgTs) {
+          const nowTs = Date.now();
+          const awayMins = Math.round((nowTs - bgTs) / 60000);
+          const todayStr = getLocalDateStr();
+          const bgDateStr = getLocalDateStr(new Date(bgTs));
+          const curSettings = latestRef.current.settings || {};
+          const threshold = curSettings.telemetryThresholdMinutes ?? 15;
+
+          if (bgDateStr === todayStr && shouldRegisterTelemetryInCalendar(awayMins, threshold) && awayMins <= 240) {
+            const { startTime, endTime } = calculateTimeWindow(awayMins, new Date(nowTs));
+            const entryId = 'tel_auto_' + nowTs;
+            const autoRegister = curSettings.autoTelemetryCalendar !== false;
+
+            let newEntry = {
+              id: entryId,
+              date: todayStr,
+              appName: 'App externa detectada',
+              category: 'Digital',
+              minutes: awayMins,
+              startTime,
+              endTime,
+              registeredInCalendar: false,
+              calendarEventId: null,
+              source: 'auto_appstate',
+            };
+
+            let nextEvents = latestRef.current.events || [];
+            if (autoRegister) {
+              const evId = 'e_tel_' + entryId;
+              const calEv = {
+                id: evId,
+                ...buildTelemetryCalendarEvent(newEntry, threshold),
+              };
+              nextEvents = [calEv, ...nextEvents];
+              newEntry = {
+                ...newEntry,
+                registeredInCalendar: true,
+                calendarEventId: evId,
+              };
+              setEvents(nextEvents);
+            }
+
+            const nextLogs = [newEntry, ...(latestRef.current.telemetryLogs || [])];
+            setTelemetryLogs(nextLogs);
+            saveAppData({
+              events: nextEvents,
+              telemetry: {
+                logs: nextLogs,
+                activeMinutesByDate: latestRef.current.activeMinutesByDate,
+              },
+            });
+          }
+        }
+      }
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      subscription.remove();
+    };
+  }, []);
+
+  const persistData = (newEvents, newGoals, newTasks, newSettings, newTelemetry) => {
     saveAppData({
       events: newEvents !== undefined ? newEvents : events,
       goals: newGoals !== undefined ? newGoals : goals,
       tasks: newTasks !== undefined ? newTasks : tasks,
       settings: newSettings !== undefined ? newSettings : settings,
+      telemetry: newTelemetry !== undefined
+        ? newTelemetry
+        : { logs: telemetryLogs, activeMinutesByDate },
     });
   };
 
@@ -710,7 +934,7 @@ export const AppDataProvider = ({ children }) => {
     if (actionForOriginal === 'tomorrow') {
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().split('T')[0];
+      const tomorrowStr = getLocalDateStr(tomorrow);
       if (originalItemType === 'task') {
         rescheduleTask(originalItemId, tomorrowStr);
       } else if (originalItemType === 'event') {
@@ -721,6 +945,184 @@ export const AppDataProvider = ({ children }) => {
     }
 
     return newEvent;
+  };
+
+  // Telemetry Management
+  const logAppTelemetry = ({
+    appName,
+    minutes,
+    category = 'Digital',
+    date = getLocalDateStr(),
+    startTime = null,
+    endTime = null,
+    source = 'manual',
+  }) => {
+    const cleanName = (appName || '').trim();
+    const numMins = Math.round(Number(minutes) || 0);
+    if (!cleanName || numMins <= 0) return null;
+
+    const threshold = settings.telemetryThresholdMinutes ?? 15;
+    const autoRegister = settings.autoTelemetryCalendar !== false;
+    const windowTimes = startTime && endTime ? { startTime, endTime } : calculateTimeWindow(numMins);
+    const entryId = 'tel_' + Date.now().toString();
+
+    let newEntry = {
+      id: entryId,
+      date,
+      appName: cleanName,
+      category,
+      minutes: numMins,
+      startTime: windowTimes.startTime,
+      endTime: windowTimes.endTime,
+      registeredInCalendar: false,
+      calendarEventId: null,
+      source,
+    };
+
+    let updatedEvents = events;
+    const qualifies = shouldRegisterTelemetryInCalendar(numMins, threshold);
+
+    if (qualifies && autoRegister) {
+      const evId = 'e_tel_' + entryId;
+      const calEvent = {
+        id: evId,
+        ...buildTelemetryCalendarEvent(newEntry, threshold),
+      };
+      updatedEvents = [calEvent, ...events];
+      newEntry = {
+        ...newEntry,
+        registeredInCalendar: true,
+        calendarEventId: evId,
+      };
+      setEvents(updatedEvents);
+    }
+
+    const updatedLogs = [newEntry, ...telemetryLogs];
+    setTelemetryLogs(updatedLogs);
+    persistData(updatedEvents, goals, tasks, settings, {
+      logs: updatedLogs,
+      activeMinutesByDate,
+    });
+
+    return {
+      entry: newEntry,
+      qualifiesForCalendar: qualifies,
+      registeredInCalendar: newEntry.registeredInCalendar,
+    };
+  };
+
+  const syncTelemetryEntryToCalendar = (telemetryId, force = false) => {
+    const entry = telemetryLogs.find((t) => t.id === telemetryId);
+    if (!entry || entry.registeredInCalendar) return null;
+
+    const threshold = settings.telemetryThresholdMinutes ?? 15;
+    if (!force && !shouldRegisterTelemetryInCalendar(entry.minutes, threshold)) {
+      return null;
+    }
+
+    const evId = 'e_tel_' + entry.id;
+    const calEvent = {
+      id: evId,
+      ...buildTelemetryCalendarEvent(entry, threshold),
+    };
+    const updatedEvents = [calEvent, ...events];
+    const updatedLogs = telemetryLogs.map((t) =>
+      t.id === telemetryId
+        ? { ...t, registeredInCalendar: true, calendarEventId: evId }
+        : t
+    );
+
+    setEvents(updatedEvents);
+    setTelemetryLogs(updatedLogs);
+    persistData(updatedEvents, goals, tasks, settings, {
+      logs: updatedLogs,
+      activeMinutesByDate,
+    });
+    return calEvent;
+  };
+
+  const syncAllPendingTelemetryToCalendar = (dateStr = getLocalDateStr()) => {
+    const threshold = settings.telemetryThresholdMinutes ?? 15;
+    const pending = telemetryLogs.filter(
+      (t) =>
+        t.date === dateStr &&
+        !t.registeredInCalendar &&
+        shouldRegisterTelemetryInCalendar(t.minutes, threshold)
+    );
+    if (pending.length === 0) return 0;
+
+    const newCalEvents = [];
+    const pendingIds = new Set(pending.map((p) => p.id));
+
+    const updatedLogs = telemetryLogs.map((t) => {
+      if (pendingIds.has(t.id)) {
+        const evId = 'e_tel_' + t.id;
+        newCalEvents.push({
+          id: evId,
+          ...buildTelemetryCalendarEvent(t, threshold),
+        });
+        return { ...t, registeredInCalendar: true, calendarEventId: evId };
+      }
+      return t;
+    });
+
+    const updatedEvents = [...newCalEvents, ...events];
+    setEvents(updatedEvents);
+    setTelemetryLogs(updatedLogs);
+    persistData(updatedEvents, goals, tasks, settings, {
+      logs: updatedLogs,
+      activeMinutesByDate,
+    });
+    return newCalEvents.length;
+  };
+
+  const updateTelemetryAppName = (telemetryId, newAppName, newCategory = null) => {
+    const cleanName = (newAppName || '').trim();
+    if (!cleanName) return;
+
+    const target = telemetryLogs.find((t) => t.id === telemetryId);
+    if (!target) return;
+
+    const nextCategory = newCategory || target.category || 'Digital';
+    const updatedLogs = telemetryLogs.map((t) =>
+      t.id === telemetryId ? { ...t, appName: cleanName, category: nextCategory } : t
+    );
+
+    let updatedEvents = events;
+    if (target.calendarEventId) {
+      updatedEvents = events.map((ev) =>
+        ev.id === target.calendarEventId
+          ? {
+              ...ev,
+              title: `📱 ${cleanName} (${target.minutes} min)`,
+              category: nextCategory,
+              telemetryAppName: cleanName,
+            }
+          : ev
+      );
+      setEvents(updatedEvents);
+    }
+
+    setTelemetryLogs(updatedLogs);
+    persistData(updatedEvents, goals, tasks, settings, {
+      logs: updatedLogs,
+      activeMinutesByDate,
+    });
+  };
+
+  const deleteTelemetryEntry = (telemetryId) => {
+    const target = telemetryLogs.find((t) => t.id === telemetryId);
+    const updatedLogs = telemetryLogs.filter((t) => t.id !== telemetryId);
+    let updatedEvents = events;
+    if (target?.calendarEventId) {
+      updatedEvents = events.filter((ev) => ev.id !== target.calendarEventId);
+      setEvents(updatedEvents);
+    }
+    setTelemetryLogs(updatedLogs);
+    persistData(updatedEvents, goals, tasks, settings, {
+      logs: updatedLogs,
+      activeMinutesByDate,
+    });
   };
 
   const updateSettings = async (newSettingsFields) => {
@@ -746,6 +1148,8 @@ export const AppDataProvider = ({ children }) => {
         goals,
         tasks,
         settings,
+        telemetryLogs,
+        activeMinutesByDate,
         loading,
         addEvent,
         updateEvent,
@@ -767,6 +1171,11 @@ export const AppDataProvider = ({ children }) => {
         scheduleTaskInCalendar,
         recordGoalProgress,
         recordReplacementActivity,
+        logAppTelemetry,
+        syncTelemetryEntryToCalendar,
+        syncAllPendingTelemetryToCalendar,
+        updateTelemetryAppName,
+        deleteTelemetryEntry,
         updateSettings,
       }}
     >

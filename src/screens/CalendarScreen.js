@@ -467,11 +467,16 @@ export const CalendarScreen = ({ onOpenNewEvent, onSelectEvent }) => {
                         left: leftPos,
                         width: colWidth,
                         backgroundColor: eventColor,
-                        borderColor: ev.isBackupPlan ? (isLight ? '#0F172A' : '#FFFFFF') : 'transparent',
-                        borderStyle: ev.isBackupPlan ? 'dashed' : 'solid',
-                        borderWidth: ev.isBackupPlan ? 2 : 0,
+                        borderColor: ev.isBackupPlan
+                          ? (isLight ? '#0F172A' : '#FFFFFF')
+                          : ev.isTelemetry
+                          ? 'rgba(255,255,255,0.45)'
+                          : 'transparent',
+                        borderStyle: ev.isBackupPlan || ev.isTelemetry ? 'dashed' : 'solid',
+                        borderWidth: ev.isBackupPlan ? 2 : ev.isTelemetry ? 1.5 : 0,
                       },
-                      ev.completed && { opacity: 0.65 },
+                      !ev.isTelemetry && ev.completed && { opacity: 0.65 },
+                      ev.isTelemetry && { opacity: 0.92 },
                     ]}
                     onPress={() => onSelectEvent(ev)}
                     activeOpacity={0.85}
@@ -495,6 +500,11 @@ export const CalendarScreen = ({ onOpenNewEvent, onSelectEvent }) => {
                           <Ionicons name="shield" size={10} color={txtColor} style={{ marginRight: 3 }} />
                           <Text style={[styles.backupTagText, { color: txtColor }]}>RESPALDO</Text>
                         </View>
+                      ) : ev.isTelemetry ? (
+                        <View style={styles.backupHeaderTag}>
+                          <Feather name="activity" size={10} color={txtColor} style={{ marginRight: 3 }} />
+                          <Text style={[styles.backupTagText, { color: txtColor }]}>TELEMETRÍA</Text>
+                        </View>
                       ) : ev.linkedTaskId ? (
                         <View style={styles.backupHeaderTag}>
                           <Ionicons name="checkbox-outline" size={10} color={txtColor} style={{ marginRight: 3 }} />
@@ -506,7 +516,7 @@ export const CalendarScreen = ({ onOpenNewEvent, onSelectEvent }) => {
                         style={[
                           styles.eventTitle,
                           { color: txtColor, fontWeight: '800' },
-                          ev.completed && styles.lineThrough,
+                          !ev.isTelemetry && ev.completed && styles.lineThrough,
                         ]}
                         numberOfLines={ev.height < 50 ? 1 : 2}
                       >
